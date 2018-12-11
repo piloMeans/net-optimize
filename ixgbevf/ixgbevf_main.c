@@ -37,6 +37,7 @@
 #define MYOWN
 
 #ifdef MYOWN
+#define VF_ARRAY_MAX 63
 struct macAddr_list{
 	struct macAddr_list *next;
 	struct macAddr_list *rnext, *rprev;
@@ -3640,7 +3641,7 @@ int ixgbevf_open(struct net_device *netdev)
 	ixgbevf_up_complete(adapter);
 
 #ifdef MYOWN
-	while(tmp){
+	while(tmp!=NULL){
 		if(tmp->netdev == netdev){
 			if(tmp->status==0){
 				tmp->status=1;
@@ -3664,7 +3665,7 @@ int ixgbevf_open(struct net_device *netdev)
 	tmp->next = all_vf;
 	all_vf = tmp;
 	vfarray_idx++;
-	mutex_lock(&all_mutex);
+	mutex_unlock(&all_mutex);
 	
 	tmp->status=1;
 	tmp->netdev = netdev;
@@ -3672,6 +3673,8 @@ int ixgbevf_open(struct net_device *netdev)
 	mutex_lock(&ready_mutex);
 	tmp->rnext = ready_vf;
 	tmp->rprev = ready_vf->rprev;
+	ready_vf->rprev -> rnext = tmp;
+	ready_vf->rprev = tmp;
 	ready_vf = tmp;
 	mutex_unlock(&ready_mutex);
 
@@ -3721,6 +3724,7 @@ static void ixgbevf_close_suspend(struct ixgbevf_adapter *adapter)
 int ixgbevf_close(struct net_device *netdev)
 {
 
+	struct ixgbevf_adapter *adapter = netdev_priv(netdev);
 #ifdef MYOWN
 	struct macAddr_list *tmp=ready_vf;
 	while(tmp && tmp->status){
@@ -3738,7 +3742,6 @@ int ixgbevf_close(struct net_device *netdev)
 		tmp=tmp->rnext;
 	}
 #endif
-	struct ixgbevf_adapter *adapter = netdev_priv(netdev);
 
 	if (netif_device_present(netdev))
 		ixgbevf_close_suspend(adapter);
@@ -4218,6 +4221,9 @@ out_drop:
 
 static netdev_tx_t ixgbevf_xmit_frame(struct sk_buff *skb, struct net_device *netdev)
 {
+
+	struct ixgbevf_adapter *adapter = netdev_priv(netdev);
+	struct ixgbevf_ring *tx_ring;
 #ifdef MYOWN
 	struct macAddr_list *tmp=ready_vf;
 	const struct ethhdr *eth = (void *)(skb->head + skb->mac_header );
@@ -4226,15 +4232,14 @@ static netdev_tx_t ixgbevf_xmit_frame(struct sk_buff *skb, struct net_device *ne
 	while(tmp && tmp->status && tmp->netdev){
 		if(ether_addr_equal_64bits(eth->h_dest, tmp->netdev->dev_addr))
 			goto diff;
-		dev_forward_skb(skb, tmp->netdev);
+		dev_forward_skb(tmp->netdev, skb);
 		return NETDEV_TX_OK;
 diff:
 		tmp=tmp->rnext;
 	}
 out:
+	;
 #endif
-	struct ixgbevf_adapter *adapter = netdev_priv(netdev);
-	struct ixgbevf_ring *tx_ring;
 
 	if (skb->len <= 0) {
 		dev_kfree_skb_any(skb);
@@ -4951,6 +4956,7 @@ static int __init ixgbevf_init_module(void)
 	ready_vf->netdev=NULL;
 	ready_vf->rnext=ready_vf;
 	ready_vf->rprev=ready_vf;
+	all_vf = NULL;
 #endif
 	return pci_register_driver(&ixgbevf_driver);
 }
