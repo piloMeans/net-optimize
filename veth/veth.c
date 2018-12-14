@@ -40,37 +40,48 @@ struct macAddr_list{
 	struct net_device *netdev;
 	u8 status;	// 0 not use  1  not active(only in all_vf)  2 active (also in ready_vf)
 };
-static struct macAddr_list vfarray[VF_ARRAY_MAX+1];
+static struct macAddr_list vfarray[VF_ARRAY_MAX+2];
 static int vfarray_idx=-1;
 static int vf_count=0;
 static struct macAddr_list *ready_vf = &(vfarray[VF_ARRAY_MAX]);
-static struct macAddr_list *all_vf;
+static struct macAddr_list *all_vf=&(vfarray[VF_ARRAY_MAX+1]);
 //static DEFINE_MUTEX(ready_mutex);
 //static DEFINE_MUTEX(all_mutex);
 static DEFINE_MUTEX(myown_mutex);
 
 #ifdef MYDEBUG
-static void myoutprint(void){
+static void myoutprint(const char *msg){
 	struct macAddr_list *tmp;
 
-	printk(KERN_INFO "=============start print============\n");
-	printk(KERN_INFO "-------------all device------------\n");
-	tmp=all_vf;
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "%s\n", msg);
+
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "=============start print============\n");
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "-------------all device------------\n");
+	tmp=all_vf->next;
 	while(tmp!=NULL){
-		printk(KERN_INFO "device: %s ifindex %d\n ", tmp->netdev->name, tmp->netdev->ifindex);
+		printk(KERN_INFO "ZXMPREFIX  ");
+		printk(KERN_CONT "device: %s ifindex %d status %d\n", tmp->netdev->name, tmp->netdev->ifindex, tmp->status);
 		tmp=tmp->next;
 	}	
 
-	printk(KERN_INFO "-------------ready device------------\n");
-	tmp=ready_vf;
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "-------------ready device------------\n");
+	tmp=ready_vf->rnext;
 	while(tmp && tmp->status){
 		if(tmp->status == 1){
-			printk(KERN_INFO "the status should not be 1 in the ready_vf list\n");
+		printk(KERN_INFO "ZXMPREFIX  ");
+			printk(KERN_CONT "the status should not be 1 in the ready_vf list\n");
 		}
-		printk(KERN_INFO "device: %s ifindex %d\n ", tmp->netdev->name, tmp->netdev->ifindex);
+
+		printk(KERN_INFO "ZXMPREFIX  ");
+		printk(KERN_CONT "device: %s ifindex %d status %d\n", tmp->netdev->name, tmp->netdev->ifindex, tmp->status);
 		tmp=tmp->rnext;
 	}
-	printk(KERN_INFO "=============end print============\n");
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "=============end print============\n");
 }
 #endif
 #endif
@@ -235,7 +246,7 @@ static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 
 #if 0
 #ifdef MYOWN
-	struct macAddr_list *tmp=ready_vf;
+	struct macAddr_list *tmp=ready_vf->rnext;
 	const struct ethhdr *eth = (void *)(skb->head + skb->mac_header );
 	if(!eth)
 		goto out;
@@ -844,19 +855,18 @@ if (!peer)
 
 #ifdef MYOWN
 	mutex_lock(&myown_mutex);
-	tmp=all_vf;
+	tmp=all_vf->next;
 	while(tmp!=NULL){
 		if((tmp->netdev == dev || tmp->netdev == peer) && tmp->status==1){
 			//if(tmp->status==1){
 				tmp->status=2;
 
 				//mutex_lock(&ready_mutex);
-				tmp->rnext=ready_vf;
-				tmp->rprev=ready_vf->rprev;
-				ready_vf->rprev->rnext=tmp;
-				ready_vf->rprev=tmp;
+				tmp->rnext=ready_vf->rnext;
+				tmp->rprev=ready_vf;
+				ready_vf->rnext->rprev=tmp;
+				ready_vf->rnext=tmp;
 
-				ready_vf=tmp;
 				//mutex_unlock(&ready_mutex);
 		//	}		
 		}
@@ -864,7 +874,7 @@ if (!peer)
 	}
 //finish:
 #ifdef MYDEBUG
-	myoutprint();
+	myoutprint("open");
 #endif
 	mutex_unlock(&myown_mutex);
 #endif
@@ -882,17 +892,27 @@ static int veth_close(struct net_device *dev)
 	struct macAddr_list *tmp;
 	struct macAddr_list *tmp2;
 
+//#ifdef MYDEBUG
+//	myoutprint("before close");
+//#endif
 	mutex_lock(&myown_mutex);
-	tmp=ready_vf;
+	tmp=ready_vf->rnext;
 	while(tmp && tmp->status){
 		tmp2=tmp->rnext;
-		if(tmp->netdev == dev || tmp->netdev == peer){
-			if(tmp->status==1)
-				printk(KERN_INFO "ERROR!!! status 1 in ready list!!!\n");
+		//if(tmp->netdev == dev || tmp->netdev == peer){
+		if(tmp->netdev == dev ){
+			if(tmp->status==1){
+				printk(KERN_INFO "ZXMPREFIX  ");
+				printk(KERN_CONT "ERROR!!! status 1 in ready list!!!\n");
+				break;
+			}
 			//mutex_lock(&ready_mutex);
 			tmp->rprev->rnext = tmp->rnext;
 			tmp->rnext->rprev = tmp->rprev;
 			//mutex_unlock(&ready_mutex);
+			//if(tmp==ready_vf){
+			//	ready_vf = tmp->rnext;
+			//}
 
 			tmp->rprev=NULL;
 			tmp->rnext=NULL;
@@ -901,7 +921,7 @@ static int veth_close(struct net_device *dev)
 		tmp=tmp2;
 	}
 #ifdef MYDEBUG
-	myoutprint();
+	myoutprint("close");
 #endif
 	mutex_unlock(&myown_mutex);
 #endif
@@ -1321,7 +1341,8 @@ static int veth_newlink(struct net *src_net, struct net_device *dev,
 	
 #ifdef MYOWN
 	if(vf_count >= VF_ARRAY_MAX){
-		printk(KERN_INFO "error, too much vf\n");
+		printk(KERN_INFO "ZXMPREFIX  ");
+		printk(KERN_CONT "error, too much vf\n");
 		goto finish;
 	}
 	
@@ -1335,8 +1356,8 @@ static int veth_newlink(struct net *src_net, struct net_device *dev,
 	}while(vfarray[vfarray_idx].status!=0);
 
 	tmp = &(vfarray[vfarray_idx]);
-	tmp->next = all_vf;
-	all_vf = tmp;
+	tmp->next = all_vf->next;
+	all_vf->next = tmp;
 	vf_count++;
 	//mutex_unlock(&all_mutex);
 	
@@ -1352,8 +1373,8 @@ static int veth_newlink(struct net *src_net, struct net_device *dev,
 	}while(vfarray[vfarray_idx].status!=0);
 
 	tmp = &(vfarray[vfarray_idx]);
-	tmp->next = all_vf;
-	all_vf = tmp;
+	tmp->next = all_vf->next;
+	all_vf->next = tmp;
 	vf_count++;
 	//mutex_unlock(&all_mutex);
 	
@@ -1362,6 +1383,9 @@ static int veth_newlink(struct net *src_net, struct net_device *dev,
 
 	mutex_unlock(&myown_mutex);
 finish:
+#ifdef MYDEBUG
+	myoutprint("probe");
+#endif
 #endif
 
 	return 0;
@@ -1383,7 +1407,6 @@ static void veth_dellink(struct net_device *dev, struct list_head *head)
 	struct net_device *peer;
 #ifdef MYOWN
 	struct macAddr_list *tmp;
-	struct macAddr_list prev;
 	struct macAddr_list *tmp2;
 	
 #endif
@@ -1392,13 +1415,21 @@ static void veth_dellink(struct net_device *dev, struct list_head *head)
 #ifdef MYOWN
 	mutex_lock(&myown_mutex);
 
-	tmp=all_vf;
-	tmp2=&prev;
-	prev.next=all_vf;
+	tmp=all_vf->next;
+	tmp2=all_vf;
 	while(tmp!=NULL){
 		if(tmp->netdev == dev || tmp->netdev == peer){
 			if(tmp->status == 2){
-				printk(KERN_INFO "ERROR!!! status = 2, directory remove ready vf ?! \n");
+				//printk(KERN_INFO "ZXMPREFIX  ");
+				//printk(KERN_CONT "del it from ready list first\n");
+				//printk(KERN_CONT "ERROR!!! status = 2, directory remove ready vf ?! \n");
+				tmp->rprev->rnext = tmp->rnext;
+				tmp->rnext->rprev = tmp->rprev;
+	//			if(tmp==ready_vf){
+	//				ready_vf = tmp->rnext;
+	//			}
+				tmp->rnext=NULL;
+				tmp->rprev=NULL;
 			}
 			//mutex_lock(ready_mutex);
 
@@ -1414,9 +1445,11 @@ static void veth_dellink(struct net_device *dev, struct list_head *head)
 		tmp2=tmp;
 		tmp=tmp->next;
 	}	
-	all_vf = prev.next;
 
 	mutex_unlock(&myown_mutex);
+#ifdef MYDEBUG
+	myoutprint("remove");
+#endif
 #endif
 
 
@@ -1478,7 +1511,13 @@ static __init int veth_init(void)
 	ready_vf->netdev=NULL;
 	ready_vf->rnext=ready_vf;
 	ready_vf->rprev=ready_vf;
-	all_vf = NULL;
+	ready_vf->next=NULL;
+
+	all_vf->status=0;
+	all_vf->netdev=NULL;
+	all_vf->rnext=NULL;
+	all_vf->rprev=NULL;
+	all_vf->next=NULL;
 #endif
 
 	return rtnl_link_register(&veth_link_ops);

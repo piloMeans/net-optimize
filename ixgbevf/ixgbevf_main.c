@@ -33,8 +33,8 @@
 
 #include "ixgbevf.h"
 
-
 #define MYOWN
+#define MYDEBUG
 
 #ifdef MYOWN
 #define VF_ARRAY_MAX 63
@@ -42,16 +42,52 @@ struct macAddr_list{
 	struct macAddr_list *next;
 	struct macAddr_list *rnext, *rprev;
 	struct net_device *netdev;
-	u8 status;
+	u8 status;	// 0 not use  1  not active(only in all_vf)  2 active (also in ready_vf)
 };
-static struct macAddr_list vfarray[65];
-static int vfarray_idx=0;
-static struct macAddr_list *ready_vf = &(vfarray[64]);
-static struct macAddr_list *all_vf;
-static DEFINE_MUTEX(ready_mutex);
-static DEFINE_MUTEX(all_mutex);
-#endif
+static struct macAddr_list vfarray[VF_ARRAY_MAX+2];
+static int vfarray_idx=-1;
+static int vf_count=0;
+static struct macAddr_list *ready_vf = &(vfarray[VF_ARRAY_MAX]);
+static struct macAddr_list *all_vf=&(vfarray[VF_ARRAY_MAX+1]);
+//static DEFINE_MUTEX(ready_mutex);
+//static DEFINE_MUTEX(all_mutex);
+static DEFINE_MUTEX(myown_mutex);
 
+#ifdef MYDEBUG
+static void myoutprint(const char *msg){
+	struct macAddr_list *tmp;
+
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "%s\n", msg);
+
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "=============start print============\n");
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "-------------all device------------\n");
+	tmp=all_vf->next;
+	while(tmp!=NULL){
+		printk(KERN_INFO "ZXMPREFIX  ");
+		printk(KERN_CONT "device: %s ifindex %d\n ", tmp->netdev->name, tmp->netdev->ifindex);
+		tmp=tmp->next;
+	}	
+
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "-------------ready device------------\n");
+	tmp=ready_vf->rnext;
+	while(tmp && tmp->status){
+		if(tmp->status == 1){
+			printk(KERN_INFO "ZXMPREFIX  ");
+			printk(KERN_CONT "the status should not be 1 in the ready_vf list\n");
+		}
+		printk(KERN_INFO "ZXMPREFIX  ");
+		printk(KERN_CONT "device: %s ifindex %d\n ", tmp->netdev->name, tmp->netdev->ifindex);
+		tmp=tmp->rnext;
+	}
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "=============end print============\n");
+}
+#endif
+#endif
 
 const char ixgbevf_driver_name[] = "ixgbevf";
 static const char ixgbevf_driver_string[] =
@@ -3584,8 +3620,9 @@ int ixgbevf_open(struct net_device *netdev)
 	int err;
 
 #ifdef MYOWN
-	struct macAddr_list *tmp=all_vf;
+	struct macAddr_list *tmp;
 #endif
+
 	/* A previous failure to open the device because of a lack of
 	 * available MSIX vector resources may have reset the number
 	 * of msix vectors variable to zero.  The only way to recover
@@ -3641,45 +3678,33 @@ int ixgbevf_open(struct net_device *netdev)
 	ixgbevf_up_complete(adapter);
 
 #ifdef MYOWN
+	mutex_lock(&myown_mutex);
+	tmp=all_vf->next;
 	while(tmp!=NULL){
-		if(tmp->netdev == netdev){
-			if(tmp->status==0){
-				tmp->status=1;
+		if((tmp->netdev == netdev) && tmp->status==1){
+			//if(tmp->status==1){
+				tmp->status=2;
 
-				mutex_lock(&ready_mutex);
-				tmp->rnext=ready_vf;
-				tmp->rprev=ready_vf->rprev;
-				ready_vf=tmp;
-				mutex_unlock(&ready_mutex);
-			}		
-			goto finish;
+				//mutex_lock(&ready_mutex);
+				tmp->rnext=ready_vf->rnext;
+				tmp->rprev=ready_vf;
+				ready_vf->rnext->rprev=tmp;
+				ready_vf->rnext=tmp;
+
+				//ready_vf=tmp;
+				//mutex_unlock(&ready_mutex);
+				break;
+		//	}		
 		}
 		tmp=tmp->next;
 	}
-	if(vfarray_idx >= VF_ARRAY_MAX){
-		printk(KERN_INFO "error, too much vf\n");
-		goto finish;
-	}
-	mutex_lock(&all_mutex);
-	tmp = &(vfarray[vfarray_idx]);
-	tmp->next = all_vf;
-	all_vf = tmp;
-	vfarray_idx++;
-	mutex_unlock(&all_mutex);
-	
-	tmp->status=1;
-	tmp->netdev = netdev;
-
-	mutex_lock(&ready_mutex);
-	tmp->rnext = ready_vf;
-	tmp->rprev = ready_vf->rprev;
-	ready_vf->rprev -> rnext = tmp;
-	ready_vf->rprev = tmp;
-	ready_vf = tmp;
-	mutex_unlock(&ready_mutex);
-
-finish:
+//finish:
+#ifdef MYDEBUG
+	myoutprint("open");
 #endif
+	mutex_unlock(&myown_mutex);
+#endif
+
 	return 0;
 
 err_set_queues:
@@ -3725,22 +3750,35 @@ int ixgbevf_close(struct net_device *netdev)
 {
 
 	struct ixgbevf_adapter *adapter = netdev_priv(netdev);
+
 #ifdef MYOWN
-	struct macAddr_list *tmp=ready_vf;
+	struct macAddr_list *tmp;
+	struct macAddr_list *tmp2;
+
+	mutex_lock(&myown_mutex);
+	tmp=ready_vf->rnext;
 	while(tmp && tmp->status){
-		if(tmp->netdev == netdev){
-			mutex_lock(&ready_mutex);
+		tmp2=tmp->rnext;
+		if(tmp->netdev == netdev ){
+			if(tmp->status==1)
+				printk(KERN_INFO "ZXMPREFIX  ");
+				printk(KERN_CONT "ERROR!!! status 1 in ready list!!!\n");
+			//mutex_lock(&ready_mutex);
 			tmp->rprev->rnext = tmp->rnext;
 			tmp->rnext->rprev = tmp->rprev;
-			mutex_unlock(&ready_mutex);
+			//mutex_unlock(&ready_mutex);
 
 			tmp->rprev=NULL;
 			tmp->rnext=NULL;
-			tmp->status=0;
+			tmp->status=1;
 			break;
 		}
-		tmp=tmp->rnext;
+		tmp=tmp2;
 	}
+#ifdef MYDEBUG
+	myoutprint("close");
+#endif
+	mutex_unlock(&myown_mutex);
 #endif
 
 	if (netif_device_present(netdev))
@@ -4224,22 +4262,32 @@ static netdev_tx_t ixgbevf_xmit_frame(struct sk_buff *skb, struct net_device *ne
 
 	struct ixgbevf_adapter *adapter = netdev_priv(netdev);
 	struct ixgbevf_ring *tx_ring;
+
+#if 0
 #ifdef MYOWN
-	struct macAddr_list *tmp=ready_vf;
+	struct macAddr_list *tmp=ready_vf->rnext;
 	const struct ethhdr *eth = (void *)(skb->head + skb->mac_header );
 	if(!eth)
 		goto out;
 	while(tmp && tmp->status && tmp->netdev){
 		if(ether_addr_equal_64bits(eth->h_dest, tmp->netdev->dev_addr))
 			goto diff;
+#ifdef MYDEBUG
+	//	printk(KERN_CONT "pkt redirect to dev %s\n",tmp->netdev->name);
+#endif
 		dev_forward_skb(tmp->netdev, skb);
 		return NETDEV_TX_OK;
 diff:
 		tmp=tmp->rnext;
 	}
 out:
+#ifdef MYDEBUG
+	//	printk(KERN_CONT "pkt not redirect to anydev \n");
+#endif
 	;
 #endif
+#endif
+
 
 	if (skb->len <= 0) {
 		dev_kfree_skb_any(skb);
@@ -4593,6 +4641,10 @@ static int ixgbevf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	int err, pci_using_dac;
 	bool disable_dev = false;
 
+#ifdef MYOWN
+	struct macAddr_list *tmp;
+#endif
+
 	err = pci_enable_device(pdev);
 	if (err)
 		return err;
@@ -4766,6 +4818,36 @@ static int ixgbevf_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		break;
 	}
 
+#ifdef MYOWN
+	if(vf_count >= VF_ARRAY_MAX){
+		printk(KERN_INFO "ZXMPREFIX  ");
+		printk(KERN_CONT "error, too much vf\n");
+		goto finish;
+	}
+	
+	mutex_lock(&myown_mutex);
+	//mutex_lock(&all_mutex);
+	do{
+		vfarray_idx++;
+		if(vfarray_idx>= VF_ARRAY_MAX)
+			vfarray_idx-= VF_ARRAY_MAX;
+	}while(vfarray[vfarray_idx].status!=0);
+
+	tmp = &(vfarray[vfarray_idx]);
+	tmp->next = all_vf->next;
+	all_vf->next = tmp;
+	vf_count++;
+	//mutex_unlock(&all_mutex);
+	
+	tmp->status=1;
+	tmp->netdev = netdev;
+
+finish:
+#ifdef MYDEBUG
+	myoutprint("probe");
+#endif
+#endif
+
 	return 0;
 
 err_register:
@@ -4801,8 +4883,53 @@ static void ixgbevf_remove(struct pci_dev *pdev)
 	struct ixgbevf_adapter *adapter;
 	bool disable_dev;
 
+#ifdef MYOWN
+	struct macAddr_list *tmp;
+	struct macAddr_list *tmp2;
+	
+#endif
+
 	if (!netdev)
 		return;
+
+#ifdef MYOWN
+	mutex_lock(&myown_mutex);
+
+	tmp=all_vf->next;
+	tmp2=all_vf;
+	while(tmp!=NULL){
+		if(tmp->netdev == netdev ){
+			if(tmp->status == 2){
+				//printk(KERN_INFO "ZXMPREFIX  ");
+				//printk(KERN_CONT "ERROR!!! status = 2, directory remove ready vf ?! \n");
+				//break;
+				// directly remove while interface still on
+				tmp->rprev->rnext = tmp->rnext;
+				tmp->rnext->rprev = tmp->rprev;	
+				tmp->rnext=NULL;
+				tmp->rprev=NULL;
+			}
+			//mutex_lock(ready_mutex);
+
+			tmp2->next=tmp->next;
+			tmp->next=NULL;
+			vf_count--;
+			//mutex_unlock(ready_mutex);
+
+			tmp->status=0;
+			//tmp=tmp->next;
+			//continue;
+			break;
+		}
+		tmp2=tmp;
+		tmp=tmp->next;
+	}	
+
+	mutex_unlock(&myown_mutex);
+#ifdef MYDEBUG
+	myoutprint("remove");
+#endif
+#endif
 
 	adapter = netdev_priv(netdev);
 
@@ -4941,6 +5068,30 @@ static struct pci_driver ixgbevf_driver = {
  **/
 static int __init ixgbevf_init_module(void)
 {
+
+#ifdef MYOWN
+	int i;
+	for(i=0;i<VF_ARRAY_MAX;i++){
+		vfarray[i].status=0;
+		vfarray[i].netdev=NULL;
+		vfarray[i].next=NULL;
+		vfarray[i].rnext=NULL;
+		vfarray[i].rprev=NULL;
+	}
+	
+	ready_vf->status=0;
+	ready_vf->netdev=NULL;
+	ready_vf->rnext=ready_vf;
+	ready_vf->rprev=ready_vf;
+	ready_vf->next=NULL;
+
+	all_vf->status=0;
+	all_vf->netdev=NULL;
+	all_vf->rnext=NULL;
+	all_vf->rprev=NULL;
+	all_vf->next=NULL;
+#endif
+
 	pr_info("%s - version %s\n", ixgbevf_driver_string,
 		ixgbevf_driver_version);
 
@@ -4951,13 +5102,6 @@ static int __init ixgbevf_init_module(void)
 		return -ENOMEM;
 	}
 
-#ifdef MYOWN
-	ready_vf->status=0;
-	ready_vf->netdev=NULL;
-	ready_vf->rnext=ready_vf;
-	ready_vf->rprev=ready_vf;
-	all_vf = NULL;
-#endif
 	return pci_register_driver(&ixgbevf_driver);
 }
 
