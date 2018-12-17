@@ -34,7 +34,7 @@
 #include "ixgbevf.h"
 
 #define MYOWN
-#define MYDEBUG
+//#define MYDEBUG
 
 #ifdef MYOWN
 #define VF_ARRAY_MAX 63
@@ -67,7 +67,7 @@ static void myoutprint(const char *msg){
 	tmp=all_vf->next;
 	while(tmp!=NULL){
 		printk(KERN_INFO "ZXMPREFIX  ");
-		printk(KERN_CONT "device: %s ifindex %d\n ", tmp->netdev->name, tmp->netdev->ifindex);
+		printk(KERN_CONT "device: %s ifindex %d status %d\n ", tmp->netdev->name, tmp->netdev->ifindex, tmp->status);
 		tmp=tmp->next;
 	}	
 
@@ -80,7 +80,7 @@ static void myoutprint(const char *msg){
 			printk(KERN_CONT "the status should not be 1 in the ready_vf list\n");
 		}
 		printk(KERN_INFO "ZXMPREFIX  ");
-		printk(KERN_CONT "device: %s ifindex %d\n ", tmp->netdev->name, tmp->netdev->ifindex);
+		printk(KERN_CONT "device: %s ifindex %d status %d\n ", tmp->netdev->name, tmp->netdev->ifindex, tmp->status);
 		tmp=tmp->rnext;
 	}
 	printk(KERN_INFO "ZXMPREFIX  ");
@@ -3760,9 +3760,10 @@ int ixgbevf_close(struct net_device *netdev)
 	while(tmp && tmp->status){
 		tmp2=tmp->rnext;
 		if(tmp->netdev == netdev ){
-			if(tmp->status==1)
+			if(tmp->status==1){
 				printk(KERN_INFO "ZXMPREFIX  ");
 				printk(KERN_CONT "ERROR!!! status 1 in ready list!!!\n");
+			}
 			//mutex_lock(&ready_mutex);
 			tmp->rprev->rnext = tmp->rnext;
 			tmp->rnext->rprev = tmp->rprev;
@@ -4263,17 +4264,21 @@ static netdev_tx_t ixgbevf_xmit_frame(struct sk_buff *skb, struct net_device *ne
 	struct ixgbevf_adapter *adapter = netdev_priv(netdev);
 	struct ixgbevf_ring *tx_ring;
 
-#if 0
+#if 1
 #ifdef MYOWN
 	struct macAddr_list *tmp=ready_vf->rnext;
 	const struct ethhdr *eth = (void *)(skb->head + skb->mac_header );
+
 	if(!eth)
 		goto out;
 	while(tmp && tmp->status && tmp->netdev){
-		if(ether_addr_equal_64bits(eth->h_dest, tmp->netdev->dev_addr))
+		if(!ether_addr_equal_64bits(eth->h_dest, tmp->netdev->dev_addr))
 			goto diff;
 #ifdef MYDEBUG
 	//	printk(KERN_CONT "pkt redirect to dev %s\n",tmp->netdev->name);
+		printk(KERN_INFO "ZXMPREFIX  ");
+		printk(KERN_CONT "pkt from dev %s redirect to dev %s\n",netdev->name, tmp->netdev->name);
+
 #endif
 		dev_forward_skb(tmp->netdev, skb);
 		return NETDEV_TX_OK;
@@ -4283,6 +4288,8 @@ diff:
 out:
 #ifdef MYDEBUG
 	//	printk(KERN_CONT "pkt not redirect to anydev \n");
+		printk(KERN_INFO "ZXMPREFIX  ");
+		printk(KERN_CONT "pkt from dev %s not redirect to anydev \n", netdev->name);
 #endif
 	;
 #endif
@@ -4846,6 +4853,7 @@ finish:
 #ifdef MYDEBUG
 	myoutprint("probe");
 #endif
+	mutex_unlock(&myown_mutex);
 #endif
 
 	return 0;
@@ -4925,10 +4933,10 @@ static void ixgbevf_remove(struct pci_dev *pdev)
 		tmp=tmp->next;
 	}	
 
-	mutex_unlock(&myown_mutex);
 #ifdef MYDEBUG
 	myoutprint("remove");
 #endif
+	mutex_unlock(&myown_mutex);
 #endif
 
 	adapter = netdev_priv(netdev);
@@ -5090,6 +5098,9 @@ static int __init ixgbevf_init_module(void)
 	all_vf->rnext=NULL;
 	all_vf->rprev=NULL;
 	all_vf->next=NULL;
+
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "insert ixgbevf module\n");
 #endif
 
 	pr_info("%s - version %s\n", ixgbevf_driver_string,
@@ -5120,6 +5131,11 @@ static void __exit ixgbevf_exit_module(void)
 		destroy_workqueue(ixgbevf_wq);
 		ixgbevf_wq = NULL;
 	}
+#ifdef MYOWN
+	printk(KERN_INFO "ZXMPREFIX  ");
+	printk(KERN_CONT "remove ixgbevf module\n");
+#endif
+	
 }
 
 #ifdef DEBUG
