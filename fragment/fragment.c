@@ -82,8 +82,11 @@ atomic_t * addr3;
 const unsigned char brk = 0xcc;
 const unsigned char call= 0xe8;
 const unsigned char jmp= 0xe9;
-struct func_table my_func_table={
+struct func_table my_func1={
 	.name = "ip_finish_output"
+};
+struct func_table my_func2={
+	.name = "is_skb_forwardable"
 };
 static int (*ip_fragment)(struct net *net, struct sock *sk, struct sk_buff *skb,
 	unsigned int mtu, int(*output)(struct net *, struct sock *, struct sk_buff *));
@@ -245,7 +248,7 @@ static int ip_finish_output_gso(struct net *net, struct sock *sk,
 
     return ret;
 }
-static int myfunc(struct net *net, struct sock *sk, struct sk_buff *skb){
+static int myfunc1(struct net *net, struct sock *sk, struct sk_buff *skb){
 	unsigned int mtu;
 	int ret;
 
@@ -287,6 +290,7 @@ static int myfunc(struct net *net, struct sock *sk, struct sk_buff *skb){
 				//if(count%100000==0)
 				//	printk(KERN_INFO "LOCAL detected\n");
 				//count++;
+				printk(KERN_INFO "run here\n");
 				rcu_read_unlock_bh();
 				return ip_finish_output2(net, sk, skb);
 			}
@@ -300,6 +304,9 @@ static int myfunc(struct net *net, struct sock *sk, struct sk_buff *skb){
 
 
     return ip_finish_output2(net, sk, skb);
+}
+static bool myfunc2(const struct net_device *dev, const struct sk_buff *skb){
+	return true;
 }
 static int __init my_fragment_init(void)
 {
@@ -315,11 +322,17 @@ static int __init my_fragment_init(void)
 		printk(KERN_INFO "func not found\n");
 	}
 	
-	my_func_table.addr = kallsyms_lookup_name(my_func_table.name);
-	if(my_func_table.addr==0){
-		printk(KERN_INFO "function %s not found in kallsyms\n", my_func_table.name);
+	my_func1.addr = kallsyms_lookup_name(my_func1.name);
+	if(my_func1.addr==0){
+		printk(KERN_INFO "function %s not found in kallsyms\n", my_func1.name);
 	}else{
-		code_modify( &(my_func_table), (unsigned long)myfunc);
+		code_modify( &(my_func1), (unsigned long)myfunc1);
+	}
+	my_func2.addr = kallsyms_lookup_name(my_func2.name);
+	if(my_func2.addr==0){
+		printk(KERN_INFO "function %s not found in kallsyms\n", my_func2.name);
+	}else{
+		code_modify( &(my_func2), (unsigned long)myfunc2);
 	}
 	printk(KERN_INFO "fragment init\n");
     return 0;
@@ -327,7 +340,8 @@ static int __init my_fragment_init(void)
 
 static void __exit my_fragment_exit(void)
 {
-	code_restore( &my_func_table);
+	code_restore( &my_func1);
+	code_restore( &my_func2);
 	printk(KERN_INFO "fragment exit\n");
 }
 
