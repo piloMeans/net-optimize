@@ -290,7 +290,8 @@ static int myfunc1(struct net *net, struct sock *sk, struct sk_buff *skb){
 				//if(count%100000==0)
 				//	printk(KERN_INFO "LOCAL detected\n");
 				//count++;
-				printk(KERN_INFO "run here\n");
+				//printk(KERN_INFO "run here\n");
+				skb_shinfo(skb)->__unused = 0xc0;
 				rcu_read_unlock_bh();
 				return ip_finish_output2(net, sk, skb);
 			}
@@ -306,7 +307,19 @@ static int myfunc1(struct net *net, struct sock *sk, struct sk_buff *skb){
     return ip_finish_output2(net, sk, skb);
 }
 static bool myfunc2(const struct net_device *dev, const struct sk_buff *skb){
-	return true;
+	unsigned int len;
+	if(!(dev->flags & IFF_UP))
+		return false;
+	len = dev->mtu + dev->hard_header_len + VLAN_HLEN;
+	if(skb->len <= len)
+		return true;
+#ifdef MYOWN
+	else if( skb_shinfo(skb) && (skb_shinfo(skb)->__unused & 0xc0)==0xc0)
+		return true;
+#endif
+	if(skb_is_gso(skb))
+		return true;
+	return false;
 }
 static int __init my_fragment_init(void)
 {
