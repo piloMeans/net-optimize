@@ -153,10 +153,7 @@ static void code_restore(struct func_table* func){
 static int mycore_func(struct sk_buff *skb){
     int ret;
 
-#ifdef MYOWN
-	struct  sock *sk= skb->sk;
-	
-#else
+#ifndef MYOWN
     net_timestamp_check(netdev_tstamp_prequeue, skb);
 
     trace_netif_rx(skb);
@@ -199,23 +196,21 @@ static int mycore_func(struct sk_buff *skb){
     {
 		
 #ifdef MYOWN
-		if(sk){
-			int mycpu;
-			unsigned int myqtail;
-			if (sk->sk_dport == 0x3930){  //server port 12345
-				mycpu=1; 
-			}else if(sk->sk_dport == 0xa05b){ //client1 port 23456
-				mycpu=2;
-			}else if(sk->sk_dport == 0x0787){ //client2 port 34567
-				mycpu=3;
-			}else{
-				goto old;
-			}
-			preempt_disable();
-			ret=enqueue_to_backlog(skb, mycpu, &myqtail);
-			preempt_enable();
-			goto out;
+		u8 dest[6];
+		int i;
+		unsigned int myqtail;
+		int mycpu;
+		for(i=0;i<6;i++){
+			dest[i]=*((u8*)(skb->head + skb->mac_header+i));
 		}
+		if(dest[0]!=0x02 || dest[1]!=0x42 || dest[2]!=0xac || dest[3]!=0x11 || 
+				dest[4]!=0x00 || dest[5]>4)
+			goto old;
+		mycpu=dest[5]-1;
+		preempt_disable();
+		ret=enqueue_to_backlog(skb, mycpu, &myqtail);
+		preempt_enable();
+		goto out;
 old:
 		;
 #endif
