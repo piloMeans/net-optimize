@@ -1,6 +1,10 @@
 
 # Problem 
 
+we developped a tool ![ftrace_based_trace](https://gitlab.com/plehdeen/ftrace_baesd_trace) to profile the pkt behavior in the kernel.
+
+## ovs vs sriov
+
 We found that the sriov is slow than the ovs when doing net communication between containers in a host.
 
 In sriov situation, we bind the vf of NIC to contianer directly.
@@ -38,29 +42,88 @@ In ovs situation, we set the two containers in one subnet and connected with ovs
 
 ```
 
-we developped a tool ![ftrace_based_trace](https://gitlab.com/plehdeen/ftrace_baesd_trace) to profile the pkt behavior in the kernel.
-
-## What we find for now
-
 And we found that the behavior of this two situation is nearly same expect the stage between VF1 and VF2. 
 
 In the sriov situation, the pkt is not the same one so the time consumed there is much more than OVS situation.
 
-#### Optimize method
+
+## tcp vs udp in netperf STREAM mode
+
+we find that udp is always slower than tcp when using netperf STREAM mode, this situation is more serious when experiment between 
+containers in a host.
+
+through the tool, we find that the udp is much slower because of fragmentation and defragmentation.
+
+## core fairness question
+
+we find that the sender always cover too much part even that's should be done by the receiver when network communication between 
+containers in one host .
+
+e.g. the sender core will deal with the packet util the recviver process wakeup (YES, the network stack part after the sortirq is 
+still under control of sender.) This kind of situation make that the receiver "steal" some cpu from sender. so when the network
+communication between them is not symmetry, the senders ability will be limited.
+
+```
+           +--------+                                  +--------+
+           | sender |                                  |receiver|
+           +----+---+                                  +----+---+
+                |                                           |            userspace
++---------------------------------------------------------------------------------+
+                |                                           |            kernelspace
+                |                                           | <-----+
+                |         softirq send pkt                  |       |
+                |         to another    |                   |       |
+                |         namespace     |                   |       +-----+
+                |                       |                   |         wake up the
+                +-------------------------------------------+         receiver
+                                        |
+                                        |
+                                        |
+
+```
+
+# Optimize method
+
+## problem 1 
 
 - build a MacAddr-table of VF
 - forward the pkt to the specific dev if dst_MAC is in the table.
 
-In this way, we donot need to copy the entire pkt and rebuild a pkt. Hope it works!
+In this way, we donot need to copy the entire pkt and rebuild a pkt. And it works!
 
+## problem 2 
 
-## How to build
+I check the route target of the pkt which is more thatn mtu, if the destination is belong to host, then 
+the fragmentation should not be done. 
 
+I write a linux module to optimize that.
+
+## problem 3
+
+I check the route target again, and if the destination if belong to host, I insert pkt into the correspond core.
+
+The Question is 
+determine the core. it's diffcult to determine,  because the network namespace can bind with different kind of 
+user namespace(and the cpuset of them may be different). so we must consider the port in it. And I must modify 
+a bunch of code to implement that.
+
+Still under development. 
+
+And I took some experiment when just bind the network namespace with only one core. and the result is good after 
+reassigning the core.
+
+# How to build
+
+## sriov
 - Attention, this code only tested in `linux 4.19.0`.
 - First, download the linux kernel src code. If you use the default kernel, you can also use the `/usr/src` things.
 - Second, replace the driver code.
 - Third, run `make oldconfig` and `make prepare` to do some preparing work.
 - Forth, run `make SUBDIRS=/path/to/driver` to build the target module
+
+## the rest
+
+they are all just linux kernel module.
 
 #### TroubleShooting
 
