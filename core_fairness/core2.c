@@ -25,7 +25,10 @@
 #include <linux/jhash.h>
 #include <asm/atomic.h>
 #include <asm/cmpxchg.h>
-
+#include <net/secure_seq.h>
+#include <net/netns/generic.h>
+#include <net/inet_common.h>
+#include <net/inet_hashtables.h>
 // header of 
 
 
@@ -38,23 +41,28 @@ struct func_table{
 	u8	origin;
 	char name[30];
 };
+/*
 struct map_unit{
 	int status;
 	u8 map[UNITSIZE];
 }
-
+*/
 
 struct map_list{
 	struct {
 		struct net *net;
-		struct map_unit *unit;
+		u8 map[UNITSIZE];
+		u16 status;
+		u16 count;
 	};
 	struct map_list *next;
 };
 
-struct map_unit maptable[MAPSIZE];
+//struct map_unit maptable[MAPSIZE];
 struct map_list maplist[MAPSIZE];
 struct map_list map_head;
+static int last=0;
+static DEFINE_MUTEX(maplist_mutex);
 
 //unsigned long count=0;
 // addr 3 is for atomic_modifying_code
@@ -85,6 +93,28 @@ struct func_table ns_destroy={
 static int (*get_rps_cpu)(struct net_device *dev, struct sk_buff *skb,
 		struct rps_dev_flow **rflowp);
 static int (*enqueue_to_backlog)(struct sk_buff *skb, int cpu, unsigned int *qtail);
+static int (*__inet_check_established)(struct inet_timewait_death_row *death_row,
+		struct sock *sk, __u16 lport, struct inet_timewait_sock **twp);
+static __net_init int (*setup_net)(struct net *net, struct user_namespace *user_ns);
+static struct net_generic *(*net_alloc_generic)(void);
+
+#define dec_ucount  mydec_ucount
+#define net_drop_ns mynet_drop_ns
+#define inc_ucount myinc_ucount
+#define __inet_bind my__inet_bind
+#define __inet_hash_connect my__inet_hash_connect
+static void (*dec_ucount)(struct ucounts *ucounts, enum ucount_type type);
+static void (*net_drop_ns)(void *p);
+static struct ucounts *(* inc_ucount)(struct user_namespace *ns, kuid_t uid, 
+		enum ucount_type type);
+static int (*__inet_hash_connect)(struct inet_timewait_death_row *death_row,
+		struct sock *sk, u32 port_offset, 
+		int (*check_established)(struct inet_timewait_death_row *, struct sock *, __u16,
+			struct inet_timewait_sock **));
+static int (*__inet_bind)(struct sock *sk, struct sockaddr *uaddr, int addr_len, 
+		bool force_bind_address_no_port, bool with_lock);
+
+static struct kmem_cache *net_cachep;
 
 static void set_page_rw(unsigned long addr){
 	unsigned int level;
@@ -250,13 +280,52 @@ old:
 		;
 #endif
 #ifdef MYOWN
-		if ( port == 255)
-			goto old;
-		int mycpu;	
+		// veth_xmit set tag on skb_shinfo(skb)->_unused means it's packet for host
+		// TODO
+		//
+		u8 mycpu;	
 		unsigned int myqtail;
-
-		//TODO  search the ns
+		u16 port;
+		struct net *net;
+		struct net_device *dev;
+		struct net *dest_net=NULL;
+		struct map_list *temp=map_head.next;
+		//search the ns
 		
+		// get the dest macaddr
+		u8 addr[8];
+
+		memcpy(addr, (skb->head+skb->mac_header), 6);
+		addr[6]=0;
+		addr[7]=0;
+
+		rcu_read_lock();
+		for_each_net_rcu(net){
+			dev = first_net_device(net);
+			while(dev){
+				if(ether_addr_equal_64bits(dev->dev_addr, addr)){
+					dest_net = net;
+					rcu_read_unlock();
+					goto find;
+				}
+				dev = next_net_device(dev);
+			}
+		}
+		rcu_read_unlock();
+		goto old;
+find:
+		while(temp!=NULL){
+			if(temp->net == dest_net){
+				goto find_1;
+			}
+			temp=temp->next;
+		}
+		goto old;
+find_1:
+		port = *(u16*)(skb->head + skb->transport_header + 2);
+		mycpu = temp->map[port];
+		if (mycpu == 255)
+			goto old;
 		preempt_disable();
 		ret=enqueue_to_backlog(skb, mycpu, &myqtail);
 		preempt_enable();
@@ -274,21 +343,42 @@ out:
 #endif
     return ret;
 }
-static int portbind(int port, struct net *net){
-	u8 cpu;
+static int portbind(int port){
+	struct net *net=current->nsproxy->net_ns;
+
+	u8 cpu=255, tempcpu;
+	u8 tempcount=0;
 	//search the ns in the 
 	struct map_list *temp=map_head.next;
 	while(temp!=NULL){
 		if(temp->net == net){
 			// get one core in cpus_allowed
-			// TODO
-			cpu = select_one(cpus_allowed);
-			temp->unit->map[port] = cpu;
+			temp->count++;	// lockless; atomic is not necessary
+			
+			//if(cpumask_next_zero(-1, &cpus_allowed) >= nr_cpu_ids)
+			//	cpu=255;
+			//else{
+			tempcount = temp->count % current->nr_cpus_allowed;
+			for_each_cpu(tempcpu, &(current->cpus_allowed)){
+				if(!tempcount){
+					cpu = tempcpu;
+					break;
+				}
+				tempcount--;
+			}
+			//}
+			temp->map[port] = cpu;
 			return 0;
 		}
 		temp=temp->next;
 	}
 	return 1;
+}
+static u32 inet_sk_port_offset(const struct sock *sk){
+	const struct inet_sock *inet = inet_sk(sk);
+	return secure_ipv4_port_ephemeral(inet->inet_rcv_saddr,
+			inet->inet_daddr,
+			inet->inet_dport);
 }
 static int port_bind_func1(struct inet_timewait_death_row *death_row, struct sock* sk){
 	u32 port_offset=0;
@@ -298,12 +388,8 @@ static int port_bind_func1(struct inet_timewait_death_row *death_row, struct soc
 	res = __inet_hash_connect(death_row, sk, port_offset, __inet_check_established);
 
 #ifdef MYOWN
-	struct net *mynet=current->nsproxy->net_ns;
-	cpumask_t cpus_allowed = current->cpus_allowed;
-
-	//TODO
-	u16 port = xxxx;
-	portbind(port, mynet);
+	u16 port = inet_sk(sk)->inet_num;
+	portbind(port);
 #endif
 	return res;
 	
@@ -312,9 +398,8 @@ static int port_bind_func2(struct socket *sock, struct sockaddr *uaddr, int addr
 	struct sock *sk = sock->sk;
 	int err;
 #ifdef MYOWN
-	u16 port = xxxx;
-	struct net *mynet=current->nsproxy->net_ns;
-	portbind(port, mynet);
+	u16 port = ((struct sockaddr_in *)uaddr) -> sin_port ;
+	portbind(port);
 
 #endif
 	if(sk->sk_prot->bind)
@@ -341,13 +426,39 @@ static int port_bind_func3(struct sock *sk){
 	release_sock(sk);
 
 #ifdef MYOWN
-	u16 port = xxxx;
-	struct net *mynet=current->nsproxy->net_ns;
-	portbind(port, mynet);
+	u16 port = inet->inet_num;
+	portbind(port);
 #endif
 	return 0;
 }
-static struct net* ns_create_func(){
+static void dec_net_namespaces(struct ucounts *ucounts){
+	dec_ucount(ucounts, UCOUNT_NET_NAMESPACES);
+}
+static void net_free(struct net *net){
+	kfree(rcu_access_pointer(net->gen));
+	kmem_cache_free(net_cachep, net);
+}
+static struct ucounts *inc_net_namespaces(struct user_namespace *ns){
+	return inc_ucount(ns, current_euid(), UCOUNT_NET_NAMESPACES);
+}
+static struct net *net_alloc(void){
+	struct net *net=NULL;
+	struct net_generic *ng;
+	ng=net_alloc_generic();
+	if(!ng)
+		goto out;
+	net=kmem_cache_zalloc(net_cachep, GFP_KERNEL);
+	if(!net)
+		goto out_free;
+	rcu_assign_pointer(net->gen, ng);
+out:
+	return net;
+out_free:
+	kfree(ng);
+	goto out;
+}
+static struct net* ns_create_func(unsigned long flags, struct user_namespace *user_ns,
+		struct net *old_net){
 	struct ucounts *ucounts;
 	struct net *net;
 	int rv;
@@ -385,49 +496,61 @@ dec_ucounts:
 		return ERR_PTR(rv);
 	}
 #ifdef MYOWN
-	// TODO find one empty map_list and map_unit
+	// find one empty map_list 
 	struct map_list *temp;
-	struct map_unit *unit;
-	temp = xxx;
-	unit = xxx;
+	int index;
+find_emptylist:
+	index=last;	
+	while(maplist[index].status!=0) index++;
 	
-	temp->net = net;
-	temp->unit = unit;
+	temp=&(maplist[index]);
 
-	//TODO insert into the list
-	//TODO LOCK is needed
+	//insert into the list
+	//LOCK is needed
+	mutex_lock(&maplist_mutex);
+	last++;
+	if(temp->status!=0){
+		mutex_unlock(&maplist_mutex);
+		goto find_emptylist;
+	}
 	temp->next=map_head.next;
 	map_head.next=temp;
+	temp->status=1;
+	mutex_unlock(&maplist_mutex);
+	temp->net = net;
 
 #endif
 	return net;	
 }
+
 static void ns_destroy_func(void *p){
 	struct net *ns = p;
 	if(ns && refcount_dec_and_test(&ns->passive)){
 #ifdef MYOWN
-		//TODO search in the list, update the status
-		// TODO LOCK the list when update it
-		// TODO MAKE SURE the map find is not NULL, need check
+		//search in the list, update the status
+		// LOCK the list when update it
+		// MAKE SURE the map find is not NULL, need check
 		struct map_list *prev = &map_head;
+
+		mutex_lock(&maplist_mutex);
 		struct map_list *temp = map_head.next;
 		while(temp!=NULL){
 			if(temp->net == ns){
 
-				temp->unit->status=0;
-				memset(temp->unit->map, 255, UNITSIZE);	
+				memset(temp->map, 255, UNITSIZE);	
 
 				// remove this maptable
 				prev->next=temp->next;
 				temp->net=NULL;
-				temp->unit=NULL;
 				temp->next=NULL;
+				temp->status=0;
 				goto find;
 			}
 			prev = prev->next;
-			temp=temp->next;
+			temp = temp->next;
 		}
 find:
+		mutex_unlock(&maplist_mutex);
 #endif
 		net_free(ns);
 	}
@@ -439,17 +562,27 @@ static int __init my_core_init(void)
 	int i;
 	
 	for(i=0;i<MAPSIZE;i++){
-		maptable[i].status=0;
-		memset(maptable[i].map, 255, UNITSIZE);
+		memset(maplist[i].map, 255, UNITSIZE);
+		maplist[i].status=0;
 		maplist[i].net=NULL;
-		maplist[i].unit=NULL;
 		maplist[i].next=NULL;
+		maplist[i].count=0;
 	}
 	map_head.next=NULL;
 
 	addr3= (atomic_t *)kallsyms_lookup_name("modifying_ftrace_code");
 	get_rps_cpu=(void *)kallsyms_lookup_name("get_rps_cpu");
 	enqueue_to_backlog=(void *)kallsyms_lookup_name("enqueue_to_backlog");
+	__inet_check_established = (void *)kallsyms_lookup_name("__inet_check_established");
+	setup_net = (void*)kallsyms_lookup_name("setup_net");
+	net_alloc_generic = (void *)kallsyms_lookup_name("net_alloc_generic");
+	dec_ucount = (void *)kallsyms_lookup_name("dec_ucount");
+	inc_ucount = (void *)kallsyms_lookup_name("inc_ucount");
+	net_drop_ns = (void *)kallsyms_lookup_name("net_drop_ns");
+	__inet_bind = (void *)kallsyms_lookup_name("__inet_bind");
+	__inet_hash_connect = (void *)kallsyms_lookup_name("__inet_hash_connect");
+
+	net_cachep = (struct kmem_cache *)kallsyms_lookup_name("net_cachep");
 
 	my_func_table.addr = kallsyms_lookup_name(my_func_table.name);
 	if(my_func_table.addr==0){
@@ -497,8 +630,8 @@ static void __exit my_core_exit(void)
 	code_restore( &port_bind1);
 	code_restore( &port_bind2);
 	code_restore( &port_bind3);
-	code_restore( &ns_create_func);
-	code_restore( &ns_destroy_func);
+	code_restore( &ns_create);
+	code_restore( &ns_destroy);
 	printk(KERN_INFO "core exit\n");
 }
 
