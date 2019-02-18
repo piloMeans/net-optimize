@@ -280,6 +280,14 @@ old:
 		;
 #endif
 #ifdef MYOWN
+    	if ( (skb_shinfo(skb)->__unused & 0x30) == 0x30)
+    		goto old;
+    	// only implement this for tcp and udp
+    	if ( *(u16*)(skb->head + skb->mac_header + 12) != 0x0008)
+    		goto old;
+    	u8 proto=*(u8*)(skb->head+skb->network_header + 13);
+    	if ( proto != 0x11 || proto !=0x06)
+    		goto old;
 		// veth_xmit set tag on skb_shinfo(skb)->_unused means it's packet for host
 		// TODO
 		//
@@ -322,13 +330,14 @@ find:
 		}
 		goto old;
 find_1:
-		port = *(u16*)(skb->head + skb->transport_header + 2);
+		port = ntohs(*(u16*)(skb->head + skb->transport_header + 2));
 		mycpu = temp->map[port];
 		if (mycpu == 255)
 			goto old;
 		preempt_disable();
 		ret=enqueue_to_backlog(skb, mycpu, &myqtail);
 		preempt_enable();
+		skb_shinfo(skb)->__unused |= 0x30;
 		goto out;
 old:
 		;
@@ -344,9 +353,12 @@ out:
     return ret;
 }
 static int portbind(int port){
+	if(!port)
+		return 1;
 	struct net *net=current->nsproxy->net_ns;
 
-	u8 cpu=255, tempcpu;
+	u8 cpu=255;
+	int tempcpu;
 	u8 tempcount=0;
 	//search the ns in the 
 	struct map_list *temp=map_head.next;
@@ -388,7 +400,7 @@ static int port_bind_func1(struct inet_timewait_death_row *death_row, struct soc
 	res = __inet_hash_connect(death_row, sk, port_offset, __inet_check_established);
 
 #ifdef MYOWN
-	u16 port = inet_sk(sk)->inet_num;
+	u16 port = sk->sk_num;
 	portbind(port);
 #endif
 	return res;
@@ -398,7 +410,7 @@ static int port_bind_func2(struct socket *sock, struct sockaddr *uaddr, int addr
 	struct sock *sk = sock->sk;
 	int err;
 #ifdef MYOWN
-	u16 port = ((struct sockaddr_in *)uaddr) -> sin_port ;
+	u16 port = ntohs(((struct sockaddr_in *)uaddr) -> sin_port);
 	portbind(port);
 
 #endif
@@ -426,7 +438,7 @@ static int port_bind_func3(struct sock *sk){
 	release_sock(sk);
 
 #ifdef MYOWN
-	u16 port = inet->inet_num;
+	u16 port = sk->sk_num;
 	portbind(port);
 #endif
 	return 0;
@@ -509,6 +521,8 @@ find_emptylist:
 	//LOCK is needed
 	mutex_lock(&maplist_mutex);
 	last++;
+	if(last>=MAPSIZE)
+		last=0;
 	if(temp->status!=0){
 		mutex_unlock(&maplist_mutex);
 		goto find_emptylist;

@@ -1,6 +1,7 @@
 #OBJECT_FILES_NON_STANDARD_pre_helper.o := y
 obj-m+=core.o
 obj-m+=core2.o
+obj-m+=test.o
 #write-objs= write_3.o  pre_helper.o
 
 
