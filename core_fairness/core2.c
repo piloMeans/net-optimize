@@ -31,7 +31,7 @@
 #include <net/inet_hashtables.h>
 // header of 
 
-
+//#define DEBUG
 #define MYOWN
 #define UNITSIZE 65536
 #define MAPSIZE 1024
@@ -280,14 +280,26 @@ old:
 		;
 #endif
 #ifdef MYOWN
-    	if ( (skb_shinfo(skb)->__unused & 0x30) == 0x30)
+    	if ( (skb_shinfo(skb)->__unused & 0x30) == 0x30){
+#ifdef DEBUG
+			printk(KERN_INFO "Not first time\n");
+#endif
     		goto old;
+		}
     	// only implement this for tcp and udp
-    	if ( *(u16*)(skb->head + skb->mac_header + 12) != 0x0008)
+    	if ( *(u16*)(skb->head + skb->mac_header + 12) != 0x0008){
+#ifdef DEBUG
+			printk(KERN_INFO "Not ip protocol\n");
+#endif
     		goto old;
-    	u8 proto=*(u8*)(skb->head+skb->network_header + 13);
-    	if ( proto != 0x11 || proto !=0x06)
+		}
+    	u8 proto=*(u8*)(skb->head+skb->network_header + 9);
+    	if ( proto != 0x11 && proto !=0x06){
+#ifdef DEBUG
+			printk(KERN_INFO "Not tcp/udp protocol\n");
+#endif
     		goto old;
+		}
 		// veth_xmit set tag on skb_shinfo(skb)->_unused means it's packet for host
 		// TODO
 		//
@@ -320,6 +332,9 @@ old:
 			}
 		}
 		rcu_read_unlock();
+#ifdef DEBUG
+		printk(KERN_INFO "Not found net\n");
+#endif
 		goto old;
 find:
 		while(temp!=NULL){
@@ -328,12 +343,19 @@ find:
 			}
 			temp=temp->next;
 		}
+#ifdef DEBUG
+		printk(KERN_INFO "Not found net2\n");
+#endif
 		goto old;
 find_1:
 		port = ntohs(*(u16*)(skb->head + skb->transport_header + 2));
 		mycpu = temp->map[port];
-		if (mycpu == 255)
+		if (mycpu == 255){
+#ifdef DEBUG
+			printk(KERN_INFO "cpu is 255\n");
+#endif
 			goto old;
+		}
 		preempt_disable();
 		ret=enqueue_to_backlog(skb, mycpu, &myqtail);
 		preempt_enable();
@@ -574,6 +596,7 @@ static int __init my_core_init(void)
 {
 	//printk(KERN_INFO "f addr is %p\n", my_run_sync);
 	int i;
+	struct net *net;
 	
 	for(i=0;i<MAPSIZE;i++){
 		memset(maplist[i].map, 255, UNITSIZE);
@@ -635,6 +658,36 @@ static int __init my_core_init(void)
 		code_modify( &(ns_destroy), (unsigned long)ns_destroy_func);
 	}
 	printk(KERN_INFO "core init\n");
+
+	// add current exist netns into the list
+	// for those already bind-port (not solved)
+	rcu_read_lock();
+	for_each_net_rcu(net){
+		struct map_list *temp;
+		int index;
+find_emptylist:
+		index=last;	
+		while(maplist[index].status!=0) index++;
+		
+		temp=&(maplist[index]);
+	
+		//insert into the list
+		//LOCK is needed
+		mutex_lock(&maplist_mutex);
+		last++;
+		if(last>=MAPSIZE)
+			last=0;
+		if(temp->status!=0){
+			mutex_unlock(&maplist_mutex);
+			goto find_emptylist;
+		}
+		temp->next=map_head.next;
+		map_head.next=temp;
+		temp->status=1;
+		mutex_unlock(&maplist_mutex);
+		temp->net = net;	
+	}
+	rcu_read_unlock();
     return 0;
 }
 
