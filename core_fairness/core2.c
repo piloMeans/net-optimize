@@ -278,12 +278,14 @@ static int mycore_func(struct sk_buff *skb){
 		goto out;
 old:
 		;
-#endif
+#else
 #ifdef MYOWN
-    	if ( (skb_shinfo(skb)->__unused & 0x30) == 0x30){
+    	if ( (skb_shinfo(skb)->__unused & 0x30) != 0x30){
+    	//if ( (skb_shinfo(skb)->__unused & 0x30) == 0x30){
 #ifdef DEBUG
-			printk(KERN_INFO "Not first time\n");
+			printk(KERN_INFO "first time\n");
 #endif
+			skb_shinfo(skb)->__unused |= 0x30;
     		goto old;
 		}
     	// only implement this for tcp and udp
@@ -359,10 +361,11 @@ find_1:
 		preempt_disable();
 		ret=enqueue_to_backlog(skb, mycpu, &myqtail);
 		preempt_enable();
-		skb_shinfo(skb)->__unused |= 0x30;
+		//skb_shinfo(skb)->__unused |= 0x30;
 		goto out;
 old:
 		;
+#endif
 #endif
         unsigned int qtail;
 

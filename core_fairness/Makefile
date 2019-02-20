@@ -2,6 +2,7 @@
 obj-m+=core.o
 obj-m+=core2.o
 obj-m+=test.o
+obj-m+=calc.o
 #write-objs= write_3.o  pre_helper.o
 
 
