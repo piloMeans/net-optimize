@@ -622,7 +622,7 @@ static int __init my_core_init(void)
 	__inet_bind = (void *)kallsyms_lookup_name("__inet_bind");
 	__inet_hash_connect = (void *)kallsyms_lookup_name("__inet_hash_connect");
 
-	net_cachep = (struct kmem_cache *)kallsyms_lookup_name("net_cachep");
+	net_cachep = *(struct kmem_cache **)kallsyms_lookup_name("net_cachep");
 
 	my_func_table.addr = kallsyms_lookup_name(my_func_table.name);
 	if(my_func_table.addr==0){
