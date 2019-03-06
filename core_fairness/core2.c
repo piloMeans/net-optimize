@@ -425,8 +425,10 @@ static int port_bind_func1(struct inet_timewait_death_row *death_row, struct soc
 	res = __inet_hash_connect(death_row, sk, port_offset, __inet_check_established);
 
 #ifdef MYOWN
-	u16 port = sk->sk_num;
-	portbind(port);
+	if(!res){
+		u16 port = sk->sk_num;
+		portbind(port);
+	}
 #endif
 	return res;
 	
@@ -434,11 +436,6 @@ static int port_bind_func1(struct inet_timewait_death_row *death_row, struct soc
 static int port_bind_func2(struct socket *sock, struct sockaddr *uaddr, int addr_len){
 	struct sock *sk = sock->sk;
 	int err;
-#ifdef MYOWN
-	u16 port = ntohs(((struct sockaddr_in *)uaddr) -> sin_port);
-	portbind(port);
-
-#endif
 	if(sk->sk_prot->bind)
 		return sk->sk_prot->bind(sk, uaddr, addr_len);
 	if(addr_len < sizeof(struct sockaddr_in))
@@ -446,7 +443,14 @@ static int port_bind_func2(struct socket *sock, struct sockaddr *uaddr, int addr
 	err= BPF_CGROUP_RUN_PROG_INET4_BIND(sk, uaddr);
 	if(err)
 		return err;
-	return __inet_bind(sk, uaddr, addr_len, false, true);
+	err=__inet_bind(sk, uaddr, addr_len, false, true);
+#ifdef MYOWN
+	if(!err){
+		u16 port = sk->sk_num;
+		portbind(port);
+	}
+#endif
+	return err;
 }
 static int port_bind_func3(struct sock *sk){
 	struct inet_sock *inet;
