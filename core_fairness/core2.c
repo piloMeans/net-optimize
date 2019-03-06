@@ -34,7 +34,11 @@
 //#define DEBUG
 #define MYOWN
 #define UNITSIZE 65536
+
+// if the count of net_namespace > 1024,
+// the kernel will boom
 #define MAPSIZE 1024
+
 struct func_table{
 	unsigned long addr;
 	u32 content;
@@ -549,7 +553,7 @@ find_emptylist:
 	//insert into the list
 	//LOCK is needed
 	mutex_lock(&maplist_mutex);
-	last++;
+	last=index+1;
 	if(last>=MAPSIZE)
 		last=0;
 	if(temp->status!=0){
@@ -681,7 +685,7 @@ find_emptylist:
 		//insert into the list
 		//LOCK is needed
 		mutex_lock(&maplist_mutex);
-		last++;
+		last=index+1;
 		if(last>=MAPSIZE)
 			last=0;
 		if(temp->status!=0){
