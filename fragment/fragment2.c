@@ -67,6 +67,8 @@
 #include <linux/netlink.h>
 #include <linux/tcp.h>
 
+//#include <linux/netfilter_ipv6.h>
+#include <net/netfilter/br_netfilter.h>
 
 #define MYOWN
 struct func_table{
@@ -76,9 +78,22 @@ struct func_table{
 	char name[30];
 };
 
+#if 0
+#define NF_BRIDGE_MAX_MAC_HEADER_LENGTH (PPPOE_SES_HLEN + ETH_HLEN)
+struct brnf_frag_data {
+	char mac[NF_BRIDGE_MAX_MAC_HEADER_LENGTH];
+	u8 encap_size;
+	u8 size;
+	u16 vlan_tci;
+	__be16 vlan_proto;
+};
+struct brnf_frag_data * brnf_frag_data_storage;
+#endif
+
 //unsigned long count=0;
 // addr 3 is for atomic_modifying_code
 atomic_t * addr3;
+
 const unsigned char brk = 0xcc;
 const unsigned char call= 0xe8;
 const unsigned char jmp= 0xe9;
@@ -88,10 +103,21 @@ struct func_table my_func1={
 struct func_table my_func2={
 	.name = "is_skb_forwardable"
 };
+struct func_table my_func3={
+	.name = "br_nf_dev_queue_xmit"
+};
 
 static int (*ip_fragment)(struct net *net, struct sock *sk, struct sk_buff *skb,
 	unsigned int mtu, int(*output)(struct net *, struct sock *, struct sk_buff *));
 static int (*ip_finish_output2)(struct net *net, struct sock *sk, struct sk_buff *skb);
+//static int (*br_dev_queue_push_xmit)(struct net *net, struct sock *sk, struct sk_buff *skb);
+#if 0
+static int (*br_validate_ipv4)(struct net *net, struct sk_buff *skb);
+static int (*br_validate_ipv6)(struct net *net, struct sk_buff *skb);
+static void (*nf_bridge_update_protocol)(struct sk_buff *skb);
+static int (*br_nf_push_frag_xmit)(struct net *net, struct sock *sk, struct sk_buff *skb);
+#endif
+
 //static int (*ip_finish_output_gso)(struct net *net, struct sock *sk, 
 //	struct sk_buff *skb, unsigned int mtu);
 
@@ -324,6 +350,128 @@ static bool myfunc2(const struct net_device *dev, const struct sk_buff *skb){
 		return true;
 	return false;
 }
+
+static unsigned int nf_bridge_mtu_reduction(const struct sk_buff *skb){
+	if(skb->nf_bridge->orig_proto == BRNF_PROTO_PPPOE)
+		return PPPOE_SES_HLEN;
+	return 0;
+}
+static void nf_bridge_info_free(struct sk_buff *skb){
+	if(skb->nf_bridge){
+		nf_bridge_put(skb->nf_bridge);
+		skb->nf_bridge=NULL;
+	}
+}
+#if 0
+static unsigned int nf_bridge_encap_header_len(const struct sk_buff *skb){
+	switch(skb->protocol){
+		case __cpu_to_be16(ETH_P_8021Q):
+			return VLAN_HLEN;
+		case __cpu_to_be16(ETH_P_PPP_SES):
+			return PPPOE_SES_HLEN;
+		default:
+			return 0;
+	}
+}
+static int br_nf_ip_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
+		int (*output)(struct net *, struct sock *, struct sk_buff *)){
+	unsigned int mtu = ip_skb_dst_mtu(sk, skb);
+	struct iphdr *iph = ip_hdr(skb);
+
+	if (unlikely(((iph->frag_off & htons(IP_DF)) && !skb->ignore_df) ||
+		     (IPCB(skb)->frag_max_size &&
+		      IPCB(skb)->frag_max_size > mtu))) {
+		IP_INC_STATS(net, IPSTATS_MIB_FRAGFAILS);
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+
+	return ip_do_fragment(net, sk, skb, output);	
+}
+#endif
+
+static int myfunc3(struct net *net, struct sock *sk, struct sk_buff *skb){
+	struct nf_bridge_info *nf_bridge = nf_bridge_info_get(skb);
+	unsigned int mtu, mtu_reserved;
+
+	mtu_reserved = nf_bridge_mtu_reduction(skb);
+	mtu = skb->dev->mtu;
+
+	if (nf_bridge->frag_max_size && nf_bridge->frag_max_size < mtu)
+		mtu = nf_bridge->frag_max_size;
+
+	if (skb_is_gso(skb) || skb->len + mtu_reserved <= mtu) {
+		nf_bridge_info_free(skb);
+		return br_dev_queue_push_xmit(net, sk, skb);
+	}
+
+	/* This is wrong! We should preserve the original fragment
+	 * boundaries by preserving frag_list rather than refragmenting.
+	 */
+#if 0
+	if (IS_ENABLED(CONFIG_NF_DEFRAG_IPV4) &&
+	    skb->protocol == htons(ETH_P_IP)) {
+		struct brnf_frag_data *data;
+
+		if (br_validate_ipv4(net, skb))
+			goto drop;
+
+		IPCB(skb)->frag_max_size = nf_bridge->frag_max_size;
+
+		nf_bridge_update_protocol(skb);
+
+#ifdef MYOWN
+		data = this_cpu_ptr(brnf_frag_data_storage);
+#else
+		data = this_cpu_ptr(&brnf_frag_data_storage);
+#endif
+
+		data->vlan_tci = skb->vlan_tci;
+		data->vlan_proto = skb->vlan_proto;
+		data->encap_size = nf_bridge_encap_header_len(skb);
+		data->size = ETH_HLEN + data->encap_size;
+
+		skb_copy_from_linear_data_offset(skb, -data->size, data->mac,
+						 data->size);
+
+		return br_nf_ip_fragment(net, sk, skb, br_nf_push_frag_xmit);
+	}
+	if (IS_ENABLED(CONFIG_NF_DEFRAG_IPV6) &&
+	    skb->protocol == htons(ETH_P_IPV6)) {
+		const struct nf_ipv6_ops *v6ops = nf_get_ipv6_ops();
+		struct brnf_frag_data *data;
+
+		if (br_validate_ipv6(net, skb))
+			goto drop;
+
+		IP6CB(skb)->frag_max_size = nf_bridge->frag_max_size;
+
+		nf_bridge_update_protocol(skb);
+
+#ifdef MYOWN
+		data = this_cpu_ptr(brnf_frag_data_storage);
+#else
+		data = this_cpu_ptr(&brnf_frag_data_storage);
+#endif
+		data->encap_size = nf_bridge_encap_header_len(skb);
+		data->size = ETH_HLEN + data->encap_size;
+
+		skb_copy_from_linear_data_offset(skb, -data->size, data->mac,
+						 data->size);
+
+		if (v6ops)
+			return v6ops->fragment(net, sk, skb, br_nf_push_frag_xmit);
+
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+#endif
+	nf_bridge_info_free(skb);
+	return br_dev_queue_push_xmit(net, sk, skb);
+ drop:
+	kfree_skb(skb);
+	return 0;
+}
 static int __init my_fragment_init(void)
 {
 	//printk(KERN_INFO "f addr is %p\n", my_run_sync);
@@ -333,8 +481,17 @@ static int __init my_fragment_init(void)
 	//ip_finish_output_gso = (void*)kallsyms_lookup_name("ip_finish_output_gso");
 	ip_fragment = (void*)kallsyms_lookup_name("ip_fragment.constprop.49");
 	ip_finish_output2 =  (void*)kallsyms_lookup_name("ip_finish_output2");
+	//br_dev_queue_push_xmit = (void*)kallsyms_lookup_name("br_dev_queue_push_xmit");
+#if 0
+	br_validate_ipv4 = (void*)kallsyms_lookup_name("br_validate_ipv4.isra.27");
+	br_validate_ipv6 = (void*)kallsyms_lookup_name("br_validate_ipv6");
+	nf_bridge_update_protocol = (void*)kallsyms_lookup_name("nf_bridge_update_protocol");
+	brnf_frag_data_storage = (struct brnf_frag_data *)kallsyms_lookup_name("brnf_frag_data_storage");
+	br_nf_push_frag_xmit = (void*)kallsyms_lookup_name("br_nf_push_frag_xmit");
+	//nf_ipv6_ops = (void*)kallsyms_lookup_name("nf_ipv6_ops");
+#endif
 
-	if(ip_fragment==NULL || ip_finish_output2==NULL){
+	if(ip_fragment==NULL || ip_finish_output2==NULL ){//|| br_dev_queue_push_xmit==NULL){
 		printk(KERN_INFO "func not found\n");
 	}
 	
@@ -350,6 +507,12 @@ static int __init my_fragment_init(void)
 	}else{
 		code_modify( &(my_func2), (unsigned long)myfunc2);
 	}
+	my_func3.addr = kallsyms_lookup_name(my_func3.name);
+	if(my_func3.addr==0){
+		printk(KERN_INFO "function %s not found in kallsyms\n", my_func3.name);
+	}else{
+		code_modify( &(my_func3), (unsigned long)myfunc3);
+	}
 	printk(KERN_INFO "fragment init\n");
     return 0;
 }
@@ -358,6 +521,7 @@ static void __exit my_fragment_exit(void)
 {
 	code_restore( &my_func1);
 	code_restore( &my_func2);
+	code_restore( &my_func3);
 	printk(KERN_INFO "fragment exit\n");
 }
 
