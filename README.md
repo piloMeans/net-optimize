@@ -125,10 +125,7 @@ This driver code needs to be built together with linux source code.
 They can be built under this project's directory, and not needed to build with kernel code.  
 Just run `make`.
 
-# How to use the module
-
-
-#### TroubleShooting
+### TroubleShooting
 
 Q: the `make command` not work
 
@@ -141,4 +138,13 @@ A: run `make SUBDIRS=script/mod/` first to generate modpost
 Q: What if the directory contains serveral drivers, but I only want to get one of them?
 
 A: run `make path/to/driver/name.ko` to get single driver. if modpost too much drivers, you can change the Makefile.
+
+
+# How to use the module
+Check if the original module is running:
+```
+lsmod | grep $module_name
+```
+
+
 
