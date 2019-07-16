@@ -141,10 +141,20 @@ A: run `make path/to/driver/name.ko` to get single driver. if modpost too much d
 
 
 # How to use the module
-Check if the original module is running:
+1. Check if the original module is running:
 ```
 lsmod | grep $module_name
 ```
-
-
+2. Stop sriov
+```
+echo 0 > /sys/class/net/enp129s0f0/device/sriov_numvfs
+```
+3. Install module
+```
+insmod
+```
+4. Remove module
+```
+rm
+```
 
