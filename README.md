@@ -1,4 +1,3 @@
-
 # Problem 
 
 we developped a tool ![ftrace_based_trace](https://gitlab.com/plehdeen/ftrace_baesd_trace) to profile the pkt behavior in the kernel.
@@ -115,15 +114,19 @@ reassigning the core.
 # How to build
 
 ## sriov
-- Attention, this code only tested in `linux 4.19.0`.
-- First, download the linux kernel src code. If you use the default kernel, you can also use the `/usr/src` things.
-- Second, replace the driver code.
-- Third, run `make oldconfig` and `make prepare` to do some preparing work.
-- Forth, run `make SUBDIRS=/path/to/driver` to build the target module
+This driver code needs to be built together with linux source code.  
+- [Attention!] This code is only tested in `linux 4.19.0`.  
+- First, download[](https://www.kernel.org/) the linux kernel sourc code. If you use the default kernel, you can also use the `/usr/src` things.  
+- Second, replace the driver code in the corresponding kernel source code directory: `drivers/net/ethernet/intel/ixgbevf/`
+- Third, run `make oldconfig` and `make prepare` to do some preparing work. [Optional, or when if something goes wrong]  
+- Forth, to only build the target module (not the whole kernel), run `make SUBDIRS=/path/to/driver` under kernel src code root directory.  
 
 ## the rest
+They can be built under this project's directory, and not needed to build with kernel code.  
+Just run `make`.
 
-they are all just linux kernel module.
+# How to use the module
+
 
 #### TroubleShooting
 
