@@ -30,6 +30,7 @@
 
 
 #define MYOWN
+int SEED = 0;
 struct func_table{
 	unsigned long addr;
 	u32 content;
@@ -204,9 +205,15 @@ static int mycore_func(struct sk_buff *skb){
 			dest[i]=*((u8*)(skb->head + skb->mac_header+i));
 		}
 		if(dest[0]!=0x02 || dest[1]!=0x42 || dest[2]!=0xac || dest[3]!=0x11 || 
-				dest[4]!=0x00 || dest[5]>4)
+				dest[4]!=0x00 || dest[5]!=0x03)
 			goto old;
-		mycpu=dest[5]-1;
+		SEED += 1;
+                if ( (skb_shinfo(skb)->__unused & 0x30) != 0x30){
+                        skb_shinfo(skb)->__unused |= 0x30;
+                        mycpu = 2; //+ SEED % 2;//client core, 2 or 3
+                } else {
+                        mycpu= 4 + SEED % 2;//server core, 4 or 5
+                }
 		preempt_disable();
 		ret=enqueue_to_backlog(skb, mycpu, &myqtail);
 		preempt_enable();
