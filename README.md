@@ -1,4 +1,3 @@
-
 # Problem 
 
 we developped a tool ![ftrace_based_trace](https://gitlab.com/plehdeen/ftrace_baesd_trace) to profile the pkt behavior in the kernel.
@@ -115,17 +114,18 @@ reassigning the core.
 # How to build
 
 ## sriov
-- Attention, this code only tested in `linux 4.19.0`.
-- First, download the linux kernel src code. If you use the default kernel, you can also use the `/usr/src` things.
-- Second, replace the driver code.
-- Third, run `make oldconfig` and `make prepare` to do some preparing work.
-- Forth, run `make SUBDIRS=/path/to/driver` to build the target module
+This driver code needs to be built together with linux source code.  
+- [Attention!] This code is only tested in `linux 4.19.0`.  
+- First, download[](https://www.kernel.org/) the linux kernel sourc code. If you use the default kernel, you can also use the `/usr/src` things.  
+- Second, replace the driver code in the corresponding kernel source code directory: `drivers/net/ethernet/intel/ixgbevf/`
+- Third, run `make oldconfig` and `make prepare` to do some preparing work. [Optional, or when if something goes wrong]  
+- Forth, to only build the target module (not the whole kernel), run `make SUBDIRS=/path/to/driver` under kernel src code root directory.  
 
 ## the rest
+They can be built under this project's directory, and not needed to build with kernel code.  
+Just run `make`.
 
-they are all just linux kernel module.
-
-#### TroubleShooting
+### TroubleShooting
 
 Q: the `make command` not work
 
@@ -138,4 +138,23 @@ A: run `make SUBDIRS=script/mod/` first to generate modpost
 Q: What if the directory contains serveral drivers, but I only want to get one of them?
 
 A: run `make path/to/driver/name.ko` to get single driver. if modpost too much drivers, you can change the Makefile.
+
+
+# How to use the module
+1. Check if the original module is running:
+```
+lsmod | grep $module_name
+```
+2. Stop sriov
+```
+echo 0 > /sys/class/net/enp129s0f0/device/sriov_numvfs
+```
+3. Install module
+```
+insmod
+```
+4. Remove module
+```
+rm
+```
 
