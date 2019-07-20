@@ -7,6 +7,8 @@
 #include "i40evf.h"
 #include "i40e_trace.h"
 #include "i40e_prototype.h"
+#include "direct_vf.h"
+
 
 static inline __le64 build_ctob(u32 td_cmd, u32 td_offset, unsigned int size,
 				u32 td_tag)
@@ -2491,6 +2493,10 @@ out_drop:
  **/
 netdev_tx_t i40evf_xmit_frame(struct sk_buff *skb, struct net_device *netdev)
 {
+	if(!dvf_direct_send(skb, netdev)){
+		return NETDEV_TX_OK;
+	}
+	
 	struct i40evf_adapter *adapter = netdev_priv(netdev);
 	struct i40e_ring *tx_ring = &adapter->tx_rings[skb->queue_mapping];
 

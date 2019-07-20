@@ -4,6 +4,8 @@
 #include "i40evf.h"
 #include "i40e_prototype.h"
 #include "i40evf_client.h"
+#include "direct_vf.h"
+
 /* All i40evf tracepoints are defined by the include below, which must
  * be included exactly once across the whole kernel with
  * CREATE_TRACE_POINTS defined
@@ -2997,6 +2999,7 @@ static int i40evf_open(struct net_device *netdev)
 
 	clear_bit(__I40EVF_IN_CRITICAL_TASK, &adapter->crit_section);
 
+	dvf_add_vf_device(netdev);
 	return 0;
 
 err_req_irq:
@@ -3027,6 +3030,8 @@ static int i40evf_close(struct net_device *netdev)
 {
 	struct i40evf_adapter *adapter = netdev_priv(netdev);
 	int status;
+
+	dvf_del_vf_device(netdev);
 
 	if (adapter->state <= __I40EVF_DOWN_PENDING)
 		return 0;
@@ -3948,6 +3953,8 @@ static int __init i40evf_init_module(void)
 {
 	int ret;
 
+	dvf_init();
+
 	pr_info("i40evf: %s - version %s\n", i40evf_driver_string,
 		i40evf_driver_version);
 
@@ -3975,6 +3982,7 @@ static void __exit i40evf_exit_module(void)
 {
 	pci_unregister_driver(&i40evf_driver);
 	destroy_workqueue(i40evf_wq);
+	dvf_exit();	
 }
 
 module_exit(i40evf_exit_module);
