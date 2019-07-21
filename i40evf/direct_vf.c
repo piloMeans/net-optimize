@@ -90,7 +90,7 @@ u8 dvf_direct_send(struct sk_buff *skb, struct net_device *netdev){
     const struct ethhdr *eth = (void *)(skb->head + skb->mac_header );
 
     // send to self.netdev ignore
-    if(ether_addr_equal_64bits(eth->h_dest, netdev->dev_addr)){
+    if(ether_addr_equal(eth->h_dest, netdev->dev_addr)){
         return 1;
     }
 
@@ -100,7 +100,7 @@ u8 dvf_direct_send(struct sk_buff *skb, struct net_device *netdev){
 
     // check mapped VF
     if(node->status == DVF_STAT_NORMAL){
-        if(ether_addr_equal_64bits(eth->h_dest, node->netdev->dev_addr)){
+        if(ether_addr_equal(eth->h_dest, node->netdev->dev_addr)){
 
             // direct send
             dev_forward_skb(node->netdev, skb);
