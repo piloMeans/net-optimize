@@ -8,7 +8,7 @@
 DVF_DEV dvf_dev_list[DEV_LIST_SZIE];
 
 // dev list operate lock
-DEFINE_MUTEX(dvf_dev_list_lock);
+static DEFINE_MUTEX(dvf_dev_list_lock);
 
 // debug function
 inline void dvf_debug_echo_mac_addr(char * msg, unsigned char *macaddr){
