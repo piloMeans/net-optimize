@@ -5,41 +5,43 @@
 
 // data vars
 #define DEV_LIST_SZIE 260
-DVF_DEV dvf_dev_list[DEV_LIST_SZIE]
+DVF_DEV dvf_dev_list[DEV_LIST_SZIE];
 
 // dev list operate lock
-static DEFINE_MUTEX(dvf_dev_list_lock);
+DEFINE_MUTEX(dvf_dev_list_lock);
 
 // debug function
 inline void dvf_debug_echo_mac_addr(char * msg, unsigned char *macaddr){
-    printk(KERN_INFO "%s %h:%h:%h:%h:%h:%h", msg, 
-                                             macaddr[0], macaddr[1], macaddr[2],
-                                             macaddr[3], macaddr[4], macaddr[5]);
+    printk(KERN_INFO "%s %2x:%2x:%x:%2x:%2x:%2x", msg, 
+                                                  macaddr[0], macaddr[1], macaddr[2],
+                                                  macaddr[3], macaddr[4], macaddr[5]);
 }
 
 // mac last index
-inline int dvf_mac_index(unsigned char* maddr){
+inline int dvf_mac_index(const unsigned char* maddr){
     return (int) maddr[5];
 }
 
 // init dvf 
-static void dvf_init(){
+void dvf_init(void){
     mutex_lock(&dvf_dev_list_lock);
     memset(dvf_dev_list, 0, sizeof(DVF_DEV) * DEV_LIST_SZIE);
     mutex_unlock(&dvf_dev_list_lock);
 }
 
 // exit dvf
-static void dvf_exit(){
+void dvf_exit(void){
     dvf_init();
 }
 
 // add vf device
-static void dvf_add_vf_device(struct net_device *netdev){
-    dvf_debug_echo_mac_addr("Add VF: ", netdev->dev_addr)
+void dvf_add_vf_device(struct net_device *netdev){
+    int idx;
+    DVF_DEV_REF node;
 
-    int idx = dvf_mac_index(netdev->dev_addr)
-    DVF_DEV_REF node = &dvf_dev_list[idx];
+    idx = dvf_mac_index(netdev->dev_addr);
+    node = &dvf_dev_list[idx];
+    dvf_debug_echo_mac_addr("Add VF: ", netdev->dev_addr);
 
     if(node->status != DVF_STAT_NULL){
         printk(KERN_INFO"ADD INF, VF_DEV[%d] existed, maybe error[stat=%d]", idx, node->status);
@@ -56,14 +58,17 @@ static void dvf_add_vf_device(struct net_device *netdev){
 
 
 // del vf device
-static void dvf_del_vf_device(struct net_device *netdev){
-    dvf_debug_echo_mac_addr("Del VF: ", netdev->dev_addr)
+void dvf_del_vf_device(struct net_device *netdev){
+    int idx;
+    DVF_DEV_REF node;
+
+    dvf_debug_echo_mac_addr("Del VF: ", netdev->dev_addr);
     
-    int idx = dvf_mac_index(netdev->dev_addr)
-    DVF_DEV_REF node = &dvf_dev_list[idx];
+    idx = dvf_mac_index(netdev->dev_addr);
+    node = &dvf_dev_list[idx];
 
     // check validate
-    f(node->status == DVF_STAT_NULL){
+    if(node->status == DVF_STAT_NULL){
         printk(KERN_INFO"DEL INF, VF_DEV[%d] not find, maybe error[stat=%d]", idx, node->status);
         return;
     }
@@ -79,7 +84,9 @@ static void dvf_del_vf_device(struct net_device *netdev){
 
 // direct send:
 // return 0: success, else error
-static u8 dvf_direct_send(struct sk_buff *skb, struct net_device *netdev){
+u8 dvf_direct_send(struct sk_buff *skb, struct net_device *netdev){
+    int idx;
+    DVF_DEV_REF node;
     const struct ethhdr *eth = (void *)(skb->head + skb->mac_header );
 
     // send to self.netdev ignore
@@ -88,8 +95,8 @@ static u8 dvf_direct_send(struct sk_buff *skb, struct net_device *netdev){
     }
 
     // find netdev
-    int idx = dvf_mac_index(eth->h_dest);
-    DVF_DEV_REF node = &dvf_dev_list[idx];
+    idx = dvf_mac_index(eth->h_dest);
+    node = &dvf_dev_list[idx];
 
     // check mapped VF
     if(node->status == DVF_STAT_NORMAL){

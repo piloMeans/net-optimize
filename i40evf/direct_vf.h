@@ -13,7 +13,6 @@
 #include <linux/netdevice.h>
 #include <linux/string.h>
 #include <linux/if.h>
-#include <linux/sk_buff.h>
 #include <linux/etherdevice.h>
 #include <linux/atomic.h>
 
@@ -31,23 +30,23 @@ typedef struct {
 #define DVF_STAT_EXCEPTION 2
 
 // init dvf 
-static void dvf_init();
+void dvf_init(void);
 
 
 // exit dvf
-static void dvf_exit();
+void dvf_exit(void);
 
 
 // add vf device
-static void dvf_add_vf_device(struct net_device *netdev);
+void dvf_add_vf_device(struct net_device *netdev);
 
 
 // del vf device
-static void dvf_del_vf_device(struct net_device *netdev);
+void dvf_del_vf_device(struct net_device *netdev);
 
 
 // direct send:
 // return 0: success, else error
-static u8 dvf_direct_send(struct sk_buff *skb, struct net_device *netdev);
+u8 dvf_direct_send(struct sk_buff *skb, struct net_device *netdev);
 
 #endif
