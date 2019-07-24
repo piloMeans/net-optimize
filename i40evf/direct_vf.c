@@ -6,6 +6,8 @@
 // data vars
 #define DEV_LIST_SZIE 260
 DVF_DEV dvf_dev_list[DEV_LIST_SZIE];
+int trans_count = 0;
+int trans_fail = 0;
 
 // dev list operate lock
 static DEFINE_MUTEX(dvf_dev_list_lock);
@@ -89,10 +91,19 @@ u8 dvf_direct_send(struct sk_buff *skb, struct net_device *netdev){
     DVF_DEV_REF node;
     const struct ethhdr *eth = (void *)(skb->head + skb->mac_header );
 
-    // send to self.netdev ignore
-    if(ether_addr_equal(eth->h_dest, netdev->dev_addr)){
-        return 1;
+//    if (1){
+//        return 1;
+//    }
+
+    if (trans_count % 1000000 == 0){
+	printk(KERN_INFO"DVF has transferred %d pakcets, and failed %d", trans_count, trans_fail);
     }
+	    
+
+    // send to self.netdev ignore
+    //if(ether_addr_equal(eth->h_dest, netdev->dev_addr)){
+    //    return 1;
+    //}
 
     // find netdev
     idx = dvf_mac_index(eth->h_dest);
@@ -100,15 +111,17 @@ u8 dvf_direct_send(struct sk_buff *skb, struct net_device *netdev){
 
     // check mapped VF
     if(node->status == DVF_STAT_NORMAL){
-        if(ether_addr_equal(eth->h_dest, node->netdev->dev_addr)){
+        if(ether_addr_equal_64bits(eth->h_dest, node->netdev->dev_addr)){
 
             // direct send
             dev_forward_skb(node->netdev, skb);
+	    trans_count += 1;
             return 0;
         }
     }
 
     // End
+    trans_fail += 1; 
     return 1;
 }
 
