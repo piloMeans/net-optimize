@@ -212,7 +212,7 @@ static int mycore_func(struct sk_buff *skb){
                         skb_shinfo(skb)->__unused |= 0x30;
                         mycpu = 2; //+ SEED % 2;//client core, 2 or 3
                 } else {
-                        mycpu= 4 + SEED % 2;//server core, 4 or 5
+                        mycpu= 3; //+ SEED % 2;//server core, 4 or 5
                 }
 		preempt_disable();
 		ret=enqueue_to_backlog(skb, mycpu, &myqtail);
